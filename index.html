@@ -1,1 +1,230 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <!-- 태블릿·스마트폰 화면에 맞추기 -->
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>분리배출 도우미</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 16px;
+      font-family: "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+      background: #eaf7ee; color: #1f3d2b; text-align: center;
+    }
+    h1 { font-size: 1.6rem; margin: 8px 0; }
+    .desc { font-size: 1.05rem; margin-bottom: 16px; }
+    .buttons { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-bottom: 16px; }
+    button, .file-btn {
+      font-size: 1.15rem; padding: 14px 20px; border: none; border-radius: 14px;
+      background: #2e9e5b; color: #fff; cursor: pointer; font-weight: bold;
+    }
+    button.secondary { background: #6b7f73; }
+    button:disabled { opacity: .5; }
+    /* 사진 올리기 버튼: 실제 input은 숨기고 label을 버튼처럼 보이게 함 */
+    .file-btn { display: inline-block; background: #3b82c4; }
+    #file-input { display: none; }
+    #view {
+      width: 100%; max-width: 360px; aspect-ratio: 1 / 1; margin: 0 auto 16px;
+      background: #fff; border: 3px dashed #9fd3b3; border-radius: 16px;
+      display: flex; align-items: center; justify-content: center; overflow: hidden;
+    }
+    #view canvas, #view img { width: 100%; height: 100%; object-fit: contain; }
+    #placeholder { color: #7a9a86; padding: 12px; }
+    #result {
+      font-size: 1.8rem; font-weight: bold; min-height: 2.4rem; margin: 8px 0;
+    }
+    #bars { max-width: 360px; margin: 0 auto; text-align: left; }
+    .bar-row { margin: 6px 0; font-size: .95rem; }
+    .bar-bg { background: #d3e8da; border-radius: 8px; height: 14px; overflow: hidden; }
+    .bar-fill { background: #2e9e5b; height: 100%; width: 0; }
+    #status { color: #555; margin-top: 8px; min-height: 1.4rem; }
+    .privacy { font-size: .85rem; color: #5b7364; margin-top: 18px; }
+  </style>
+</head>
+<body>
+  <h1>♻️ 분리배출 도우미</h1>
+  <p class="desc">쓰레기를 찍거나 사진을 올리면 어떻게 버릴지 알려줘요!</p>
 
+  <div class="buttons">
+    <button id="camera-btn" type="button">📷 카메라 켜기</button>
+    <button id="snap-btn" type="button" class="secondary" disabled>🔍 이 모습으로 확인</button>
+    <!-- 사진 올리기: 사진은 이 기기 안에서만 처리됨 -->
+    <label class="file-btn" for="file-input">🖼️ 사진 올리기</label>
+    <input id="file-input" type="file" accept="image/*">
+  </div>
+
+  <!-- 카메라 화면 또는 올린 사진이 보이는 곳 -->
+  <div id="view"><span id="placeholder">카메라를 켜거나 사진을 올려 주세요</span></div>
+
+  <div id="result"></div>
+  <div id="bars"></div>
+  <div id="status">모델을 불러오는 중이에요...</div>
+
+  <p class="privacy">🔒 사진은 밖으로 보내지 않고 이 기기 안에서만 사용해요.</p>
+
+  <!-- 티처블머신이 제공한 script (그대로 사용) -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8/dist/teachablemachine-image.min.js"></script>
+
+  <script>
+    // ===== 설정 =====
+    const MODEL_URL = "./model.json";       // 같은 폴더의 모델 파일
+    const METADATA_URL = "./metadata.json"; // 같은 폴더의 메타데이터 파일
+    const THRESHOLD = 0.7;                  // 이 값보다 낮으면 "잘 모르겠어요"
+
+    let model = null;      // 불러온 모델
+    let webcam = null;     // 웹캠 객체 (켜져 있을 때만 존재)
+    let rafId = null;      // 카메라 반복 예측용 id
+    let predicting = false;
+
+    const view = document.getElementById("view");
+    const resultEl = document.getElementById("result");
+    const barsEl = document.getElementById("bars");
+    const statusEl = document.getElementById("status");
+    const cameraBtn = document.getElementById("camera-btn");
+    const snapBtn = document.getElementById("snap-btn");
+    const fileInput = document.getElementById("file-input");
+
+    // ===== 1. 모델 불러오기 (페이지가 열리면 자동 실행) =====
+    async function loadModel() {
+      try {
+        model = await tmImage.load(MODEL_URL, METADATA_URL);
+        statusEl.textContent = "준비 완료! 카메라를 켜거나 사진을 올려 보세요.";
+      } catch (e) {
+        console.error(e);
+        statusEl.textContent = "모델을 불러오지 못했어요. 웹 주소(https)로 열었는지 확인해 주세요.";
+      }
+    }
+    loadModel();
+
+    // ===== 2. 결과 보여주기 =====
+    // prediction: [{className, probability}, ...]
+    function showResult(prediction) {
+      // 확률이 가장 높은 항목 찾기
+      let best = prediction[0];
+      for (const p of prediction) {
+        if (p.probability > best.probability) best = p;
+      }
+
+      // 최대 확률이 0.7 미만이면 "잘 모르겠어요"
+      if (best.probability < THRESHOLD) {
+        resultEl.textContent = "🤔 잘 모르겠어요";
+      } else {
+        resultEl.textContent = best.className;
+      }
+
+      // 항목별 확률 막대 그리기 (textContent만 사용해서 안전하게)
+      barsEl.textContent = "";
+      for (const p of prediction) {
+        const row = document.createElement("div");
+        row.className = "bar-row";
+        const label = document.createElement("div");
+        label.textContent = p.className + " " + Math.round(p.probability * 100) + "%";
+        const bg = document.createElement("div");
+        bg.className = "bar-bg";
+        const fill = document.createElement("div");
+        fill.className = "bar-fill";
+        fill.style.width = (p.probability * 100) + "%";
+        bg.appendChild(fill);
+        row.appendChild(label);
+        row.appendChild(bg);
+        barsEl.appendChild(row);
+      }
+    }
+
+    // ===== 3. 카메라 =====
+    async function startCamera() {
+      if (!model) { statusEl.textContent = "아직 모델을 불러오는 중이에요."; return; }
+      cameraBtn.disabled = true;
+      statusEl.textContent = "카메라를 켜는 중...";
+      try {
+        // 뒷면 카메라를 우선 사용 (태블릿·스마트폰)
+        webcam = new tmImage.Webcam(360, 360, false);
+        await webcam.setup({ facingMode: "environment" });
+        await webcam.play();
+
+        view.textContent = "";
+        view.appendChild(webcam.canvas);
+        cameraBtn.textContent = "⏹️ 카메라 끄기";
+        cameraBtn.disabled = false;
+        snapBtn.disabled = true; // 실시간으로 계속 판별하므로 필요 없음
+        statusEl.textContent = "실시간으로 알려주고 있어요.";
+        rafId = window.requestAnimationFrame(cameraLoop);
+      } catch (e) {
+        console.error(e);
+        webcam = null;
+        cameraBtn.disabled = false;
+        statusEl.textContent = "카메라를 쓸 수 없어요. 카메라 권한을 허용했는지 확인해 주세요. (사진 올리기는 사용할 수 있어요)";
+      }
+    }
+
+    function stopCamera() {
+      if (rafId) window.cancelAnimationFrame(rafId);
+      rafId = null;
+      if (webcam) { webcam.stop(); webcam = null; }
+      view.textContent = "";
+      const ph = document.createElement("span");
+      ph.id = "placeholder";
+      ph.textContent = "카메라를 켜거나 사진을 올려 주세요";
+      view.appendChild(ph);
+      cameraBtn.textContent = "📷 카메라 켜기";
+      statusEl.textContent = "카메라를 껐어요.";
+    }
+
+    // 카메라 화면을 계속 갱신하며 판별
+    async function cameraLoop() {
+      if (!webcam) return;
+      webcam.update();
+      if (!predicting) {
+        predicting = true;
+        try {
+          const prediction = await model.predict(webcam.canvas);
+          if (webcam) showResult(prediction);
+        } finally {
+          predicting = false;
+        }
+      }
+      if (webcam) rafId = window.requestAnimationFrame(cameraLoop);
+    }
+
+    cameraBtn.addEventListener("click", () => {
+      if (webcam) stopCamera(); else startCamera();
+    });
+
+    // ===== 4. 사진 올리기 (기기 안에서만 처리, 서버로 전송 안 함) =====
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+      if (!model) { statusEl.textContent = "아직 모델을 불러오는 중이에요."; return; }
+
+      // 카메라가 켜져 있으면 먼저 끄기
+      if (webcam) stopCamera();
+
+      // 브라우저 안에서만 쓰는 임시 주소 만들기
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = async () => {
+        view.textContent = "";
+        view.appendChild(img);
+        statusEl.textContent = "판별하는 중...";
+        try {
+          const prediction = await model.predict(img);
+          showResult(prediction);
+          statusEl.textContent = "판별 완료!";
+        } catch (e) {
+          console.error(e);
+          statusEl.textContent = "사진을 판별하지 못했어요.";
+        }
+        URL.revokeObjectURL(url); // 임시 주소 정리
+      };
+      img.onerror = () => {
+        statusEl.textContent = "사진을 열 수 없어요. 다른 사진을 골라 주세요.";
+        URL.revokeObjectURL(url);
+      };
+      img.src = url;
+      fileInput.value = ""; // 같은 사진을 다시 고를 수 있게 초기화
+    });
+  </script>
+</body>
+</html>
