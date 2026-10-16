@@ -1,1 +1,337 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <!-- 태블릿·PC 화면에 맞추기 -->
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>분리배출 도우미 - 교사용 평가 화면</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 16px;
+      font-family: "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+      background: #f1f5f3; color: #1f3d2b;
+    }
+    h1 { font-size: 1.5rem; margin: 4px 0 12px; text-align: center; }
+    /* 화면을 네 부분(2x2)으로 나누기 */
+    .grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+      max-width: 1200px; margin: 0 auto;
+    }
+    @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+    .panel {
+      background: #fff; border: 1px solid #d5e3da; border-radius: 14px;
+      padding: 16px; box-shadow: 0 4px 12px rgba(0,0,0,.05); min-height: 300px;
+      overflow-x: auto;
+    }
+    .panel h2 { font-size: 1.15rem; margin: 0 0 12px; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+    button, .file-btn {
+      font-size: 1rem; padding: 10px 16px; border: none; border-radius: 10px;
+      background: #2e9e5b; color: #fff; cursor: pointer; font-weight: bold;
+    }
+    .file-btn { display: inline-block; background: #3b82c4; }
+    button.gray { background: #6b7f73; }
+    button:disabled, select:disabled { opacity: .5; cursor: not-allowed; }
+    .file-btn.disabled { opacity: .5; pointer-events: none; }
+    #file-input { display: none; }
+    select { font-size: 1rem; padding: 8px; border-radius: 8px; border: 1px solid #aac; }
+    .hint { font-size: .9rem; color: #5b7364; line-height: 1.5; }
+    #total-acc { font-size: 2.2rem; font-weight: bold; color: #2e9e5b; margin: 8px 0 2px; }
+    #status { font-size: .9rem; color: #555; min-height: 1.3rem; }
+    /* 가로 막대 그래프 */
+    .bar-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+    .bar-label { width: 90px; font-size: .95rem; }
+    .bar-bg { flex: 1; background: #dfeee5; border-radius: 8px; height: 22px; overflow: hidden; }
+    .bar-fill { background: #2e9e5b; height: 100%; width: 0; transition: width .3s; }
+    .bar-value { width: 110px; font-size: .85rem; text-align: right; }
+    /* 혼동행렬 표 */
+    table { border-collapse: collapse; width: 100%; text-align: center; font-size: .95rem; }
+    th, td { border: 1px solid #cfe0d5; padding: 8px 6px; }
+    th { background: #e9f4ed; }
+    td.diag { background: #d6f0dd; font-weight: bold; }
+    td.off { background: #fff4f4; }
+    /* 틀린 사진 */
+    #wrong-list { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .wrong-item { border: 1px solid #f0c9c9; border-radius: 10px; padding: 6px; background: #fff8f8; font-size: .85rem; }
+    .wrong-item img { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; border-radius: 8px; }
+    .privacy { text-align: center; font-size: .85rem; color: #5b7364; margin-top: 14px; }
+  </style>
+</head>
+<body>
+  <h1>👩‍🏫 교사용 평가 화면</h1>
 
+  <div class="grid">
+
+    <!-- ① 왼쪽 위: 테스트 사진 넣기 -->
+    <section class="panel">
+      <h2>1. 테스트 사진 넣기</h2>
+      <div class="row">
+        <label for="true-class">사진의 실제 종류:</label>
+        <select id="true-class" disabled></select>
+      </div>
+      <div class="row">
+        <!-- 사진 여러 장 선택 (기기 안에서만 처리, 서버로 전송하지 않음) -->
+        <label class="file-btn disabled" id="file-label" for="file-input">사진 선택</label>
+        <input id="file-input" type="file" accept="image/*" multiple>
+        <button id="reset-btn" type="button" class="gray">초기화</button>
+      </div>
+      <p class="hint">① 실제 종류를 고르고 ② 그 종류의 사진을 여러 장 선택하세요. 종류를 바꿔 가며 반복해서 추가할 수 있어요.
+        최대 확률이 0.7 미만이면 틀린 것으로 처리해요.</p>
+      <div>전체 정확도</div>
+      <div id="total-acc">-</div>
+      <div id="total-detail" class="hint"></div>
+      <div id="status">모델을 불러오는 중이에요...</div>
+    </section>
+
+    <!-- ② 오른쪽 위: 클래스별 정분류율 -->
+    <section class="panel">
+      <h2>2. 클래스별 정분류율</h2>
+      <div id="bars"><p class="hint">사진을 넣으면 그래프가 나타나요.</p></div>
+      <div class="row" style="margin-top:12px;">
+        <button id="csv-btn" type="button" disabled>csv 내려받기</button>
+      </div>
+    </section>
+
+    <!-- ③ 왼쪽 아래: 혼동행렬 -->
+    <section class="panel">
+      <h2>3. 혼동행렬 (행: 실제 / 열: 예측)</h2>
+      <div id="matrix"><p class="hint">사진을 넣으면 표가 나타나요.</p></div>
+      <p class="hint">‘잘 모르겠어요’ 열은 최대 확률이 0.7 미만이라 판단하지 못한 사진이에요.</p>
+    </section>
+
+    <!-- ④ 오른쪽 아래: 틀린 사진 -->
+    <section class="panel">
+      <h2>4. 틀린 사진 (최대 4장)</h2>
+      <div id="wrong-list"><p class="hint">틀린 사진이 있으면 여기에 보여요.</p></div>
+    </section>
+
+  </div>
+
+  <p class="privacy">🔒 사진은 밖으로 보내지 않고 이 기기 안에서만 사용해요. 아무것도 저장하지 않아요.</p>
+
+  <!-- 티처블머신이 제공한 script (그대로 사용) -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8/dist/teachablemachine-image.min.js"></script>
+
+  <script>
+    // ===== 설정 =====
+    const MODEL_URL = "./model.json";       // 같은 폴더의 모델 파일
+    const METADATA_URL = "./metadata.json"; // 같은 폴더의 메타데이터 파일
+    const THRESHOLD = 0.7;                  // 최대 확률이 이 값보다 낮으면 "틀림"
+    const UNSURE = "잘 모르겠어요";          // 판단 못한 경우의 이름
+    const MAX_WRONG_SHOWN = 4;              // 틀린 사진 표시 개수
+
+    let model = null;
+    let classes = [];   // 모델의 클래스 이름들 (예: 일반쓰레기, 비닐, 플라스틱, 종이)
+    let results = [];   // 결과 목록: { actual, predicted, prob, url, name }
+
+    const $ = (id) => document.getElementById(id);
+    const statusEl = $("status");
+    const selectEl = $("true-class");
+    const fileInput = $("file-input");
+    const fileLabel = $("file-label");
+
+    // ===== 1. 모델 불러오기 =====
+    async function loadModel() {
+      try {
+        model = await tmImage.load(MODEL_URL, METADATA_URL);
+        classes = model.getClassLabels();   // 클래스 이름은 모델에서 자동으로 가져옴
+        for (const c of classes) {
+          const opt = document.createElement("option");
+          opt.value = c; opt.textContent = c;
+          selectEl.appendChild(opt);
+        }
+        selectEl.disabled = false;
+        fileLabel.classList.remove("disabled");
+        statusEl.textContent = "준비 완료! 실제 종류를 고르고 사진을 선택하세요.";
+        render();
+      } catch (e) {
+        console.error(e);
+        statusEl.textContent = "모델을 불러오지 못했어요. 웹 주소(https)로 열었는지 확인해 주세요.";
+      }
+    }
+    loadModel();
+
+    // ===== 2. 사진 한 장 불러오기 =====
+    function loadImage(file) {
+      return new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(file); // 이 기기 안에서만 쓰는 임시 주소
+        const img = new Image();
+        img.onload = () => resolve({ img, url });
+        img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("열 수 없음")); };
+        img.src = url;
+      });
+    }
+
+    // ===== 3. 사진 여러 장 판별 =====
+    fileInput.addEventListener("change", async () => {
+      const files = Array.from(fileInput.files || []);
+      if (!model || files.length === 0) return;
+      const actual = selectEl.value; // 지금 고른 실제 종류
+      fileInput.disabled = true;
+
+      let done = 0, failed = 0;
+      for (const file of files) {
+        statusEl.textContent = "판별하는 중... (" + (done + failed + 1) + "/" + files.length + ")";
+        try {
+          const { img, url } = await loadImage(file);
+          const prediction = await model.predict(img);
+          // 확률이 가장 높은 클래스 찾기
+          let best = prediction[0];
+          for (const p of prediction) if (p.probability > best.probability) best = p;
+          // 0.7 미만이면 판단하지 못한 것으로 처리
+          const predicted = best.probability < THRESHOLD ? UNSURE : best.className;
+          results.push({ actual, predicted, prob: best.probability, url, name: file.name });
+          done++;
+        } catch (e) {
+          console.error(e);
+          failed++;
+        }
+      }
+      fileInput.value = ""; // 같은 사진도 다시 고를 수 있게
+      fileInput.disabled = false;
+      statusEl.textContent = done + "장 판별 완료" + (failed ? " (열지 못한 사진 " + failed + "장)" : "") + ".";
+      render();
+    });
+
+    // ===== 4. 초기화 =====
+    $("reset-btn").addEventListener("click", () => {
+      for (const r of results) URL.revokeObjectURL(r.url); // 임시 주소 정리
+      results = [];
+      statusEl.textContent = "초기화했어요.";
+      render();
+    });
+
+    // ===== 5. 통계 계산 =====
+    function compute() {
+      // 혼동행렬: matrix[실제][예측], 예측에는 "잘 모르겠어요" 열 포함
+      const matrix = {};
+      for (const a of classes) {
+        matrix[a] = {};
+        for (const p of classes.concat(UNSURE)) matrix[a][p] = 0;
+      }
+      for (const r of results) matrix[r.actual][r.predicted]++;
+
+      // 클래스별 정분류 (실제 종류와 예측이 같고, 0.7 이상인 경우만 정답)
+      const perClass = classes.map((c) => {
+        const total = classes.concat(UNSURE).reduce((s, p) => s + matrix[c][p], 0);
+        const correct = matrix[c][c];
+        return { name: c, total, correct, rate: total ? correct / total : null };
+      });
+      const total = results.length;
+      const correct = perClass.reduce((s, c) => s + c.correct, 0);
+      return { matrix, perClass, total, correct };
+    }
+
+    // ===== 6. 화면 그리기 =====
+    function render() {
+      const s = compute();
+
+      // 전체 정확도
+      $("total-acc").textContent = s.total ? (s.correct / s.total * 100).toFixed(1) + "%" : "-";
+      $("total-detail").textContent = s.total ? "(" + s.total + "장 중 " + s.correct + "장 정답)" : "";
+
+      // 클래스별 가로 막대 그래프 (textContent만 사용해 안전하게)
+      const bars = $("bars");
+      bars.textContent = "";
+      if (!s.total) {
+        const p = document.createElement("p");
+        p.className = "hint"; p.textContent = "사진을 넣으면 그래프가 나타나요.";
+        bars.appendChild(p);
+      } else {
+        for (const c of s.perClass) {
+          const row = document.createElement("div"); row.className = "bar-row";
+          const label = document.createElement("div"); label.className = "bar-label"; label.textContent = c.name;
+          const bg = document.createElement("div"); bg.className = "bar-bg";
+          const fill = document.createElement("div"); fill.className = "bar-fill";
+          fill.style.width = c.rate === null ? "0%" : (c.rate * 100) + "%";
+          bg.appendChild(fill);
+          const val = document.createElement("div"); val.className = "bar-value";
+          val.textContent = c.rate === null ? "사진 없음" : (c.rate * 100).toFixed(1) + "% (" + c.correct + "/" + c.total + ")";
+          row.append(label, bg, val);
+          bars.appendChild(row);
+        }
+      }
+      $("csv-btn").disabled = !s.total;
+
+      // 혼동행렬 표
+      const m = $("matrix");
+      m.textContent = "";
+      if (!s.total) {
+        const p = document.createElement("p");
+        p.className = "hint"; p.textContent = "사진을 넣으면 표가 나타나요.";
+        m.appendChild(p);
+      } else {
+        const cols = classes.concat(UNSURE);
+        const table = document.createElement("table");
+        const head = document.createElement("tr");
+        const corner = document.createElement("th"); corner.textContent = "실제＼예측";
+        head.appendChild(corner);
+        for (const c of cols) { const th = document.createElement("th"); th.textContent = c; head.appendChild(th); }
+        table.appendChild(head);
+        for (const a of classes) {
+          const tr = document.createElement("tr");
+          const th = document.createElement("th"); th.textContent = a; tr.appendChild(th);
+          for (const p of cols) {
+            const td = document.createElement("td");
+            td.textContent = s.matrix[a][p];
+            td.className = (a === p) ? "diag" : (s.matrix[a][p] > 0 ? "off" : "");
+            tr.appendChild(td);
+          }
+          table.appendChild(tr);
+        }
+        m.appendChild(table);
+      }
+
+      // 틀린 사진 (최대 4장)
+      const wl = $("wrong-list");
+      wl.textContent = "";
+      const wrong = results.filter((r) => r.actual !== r.predicted);
+      if (wrong.length === 0) {
+        const p = document.createElement("p");
+        p.className = "hint"; p.textContent = s.total ? "틀린 사진이 없어요! 👏" : "틀린 사진이 있으면 여기에 보여요.";
+        wl.appendChild(p);
+      } else {
+        for (const r of wrong.slice(0, MAX_WRONG_SHOWN)) {
+          const box = document.createElement("div"); box.className = "wrong-item";
+          const img = document.createElement("img"); img.src = r.url; img.alt = r.name;
+          const t = document.createElement("div");
+          t.textContent = "실제: " + r.actual + " → 예측: " + r.predicted + " (" + Math.round(r.prob * 100) + "%)";
+          box.append(img, t);
+          wl.appendChild(box);
+        }
+        if (wrong.length > MAX_WRONG_SHOWN) {
+          const more = document.createElement("p");
+          more.className = "hint";
+          more.textContent = "틀린 사진 전체 " + wrong.length + "장 중 " + MAX_WRONG_SHOWN + "장만 보여요.";
+          wl.appendChild(more);
+        }
+      }
+    }
+
+    // ===== 7. csv 내려받기 (이 기기에서 파일로 만들기만 하고 서버로 보내지 않음) =====
+    $("csv-btn").addEventListener("click", () => {
+      const s = compute();
+      const lines = [["클래스", "사진 수", "정답 수", "정분류율(%)"]];
+      for (const c of s.perClass) {
+        lines.push([c.name, c.total, c.correct, c.rate === null ? "" : (c.rate * 100).toFixed(1)]);
+      }
+      lines.push(["전체", s.total, s.correct, s.total ? (s.correct / s.total * 100).toFixed(1) : ""]);
+      lines.push([]);
+      lines.push(["혼동행렬(행:실제/열:예측)"].concat(classes, UNSURE));
+      for (const a of classes) {
+        lines.push([a].concat(classes.concat(UNSURE).map((p) => s.matrix[a][p])));
+      }
+      const csv = lines.map((r) => r.map((v) => '"' + String(v).replace(/"/g, '""') + '"').join(",")).join("\r\n");
+      // 엑셀에서 한글이 깨지지 않도록 BOM 추가
+      const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "분리배출_평가결과.csv";
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+  </script>
+</body>
+</html>
