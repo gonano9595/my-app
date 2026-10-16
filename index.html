@@ -10,19 +10,22 @@
     body {
       margin: 0; padding: 16px;
       font-family: "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
-      background: #eaf7ee; color: #1f3d2b; text-align: center;
+      background: linear-gradient(180deg, #eaf7ee, #f8fcf9);
+      color: #1f3d2b;
+      text-align: center;
     }
-    h1 { font-size: 1.6rem; margin: 8px 0; }
+    h1 { font-size: 1.7rem; margin: 8px 0; }
     .desc { font-size: 1.05rem; margin-bottom: 16px; }
     .buttons { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-bottom: 16px; }
     button, .file-btn {
       font-size: 1.15rem; padding: 14px 20px; border: none; border-radius: 14px;
       background: #2e9e5b; color: #fff; cursor: pointer; font-weight: bold;
+      box-shadow: 0 4px 0 #237546;
     }
-    button.secondary { background: #6b7f73; }
-    button:disabled { opacity: .5; }
+    button.secondary { background: #6b7f73; box-shadow: 0 4px 0 #516056; }
+    button:disabled { opacity: .5; box-shadow: none; }
     /* 사진 올리기 버튼: 실제 input은 숨기고 label을 버튼처럼 보이게 함 */
-    .file-btn { display: inline-block; background: #3b82c4; }
+    .file-btn { display: inline-block; background: #3b82c4; box-shadow: 0 4px 0 #2b679d; }
     #file-input { display: none; }
     #view {
       width: 100%; max-width: 360px; aspect-ratio: 1 / 1; margin: 0 auto 16px;
@@ -32,7 +35,17 @@
     #view canvas, #view img { width: 100%; height: 100%; object-fit: contain; }
     #placeholder { color: #7a9a86; padding: 12px; }
     #result {
-      font-size: 1.8rem; font-weight: bold; min-height: 2.4rem; margin: 8px 0;
+      font-size: 1.9rem; font-weight: bold; min-height: 2.4rem; margin: 8px 0;
+    }
+    .result-card {
+      max-width: 360px; margin: 0 auto 12px; padding: 12px 14px;
+      background: #fff; border-radius: 16px; border: 1px solid #d8eadf;
+      box-shadow: 0 6px 16px rgba(0,0,0,.05);
+    }
+    #guide {
+      max-width: 360px; margin: 0 auto 10px; padding: 12px 14px;
+      background: #f3fff6; border: 1px solid #d8eadf; border-radius: 14px;
+      font-size: 1rem; line-height: 1.55; text-align: left;
     }
     #bars { max-width: 360px; margin: 0 auto; text-align: left; }
     .bar-row { margin: 6px 0; font-size: .95rem; }
@@ -48,7 +61,6 @@
 
   <div class="buttons">
     <button id="camera-btn" type="button">📷 카메라 켜기</button>
-    <button id="snap-btn" type="button" class="secondary" disabled>🔍 이 모습으로 확인</button>
     <!-- 사진 올리기: 사진은 이 기기 안에서만 처리됨 -->
     <label class="file-btn" for="file-input">🖼️ 사진 올리기</label>
     <input id="file-input" type="file" accept="image/*">
@@ -57,7 +69,11 @@
   <!-- 카메라 화면 또는 올린 사진이 보이는 곳 -->
   <div id="view"><span id="placeholder">카메라를 켜거나 사진을 올려 주세요</span></div>
 
-  <div id="result"></div>
+  <div class="result-card">
+    <div id="result"></div>
+    <div id="guide">판별되면 여기에 분리배출 안내가 표시돼요.</div>
+  </div>
+
   <div id="bars"></div>
   <div id="status">모델을 불러오는 중이에요...</div>
 
@@ -73,20 +89,20 @@
     const METADATA_URL = "./metadata.json"; // 같은 폴더의 메타데이터 파일
     const THRESHOLD = 0.7;                  // 이 값보다 낮으면 "잘 모르겠어요"
 
-    let model = null;      // 불러온 모델
-    let webcam = null;     // 웹캠 객체 (켜져 있을 때만 존재)
-    let rafId = null;      // 카메라 반복 예측용 id
+    let model = null;
+    let webcam = null;
+    let rafId = null;
     let predicting = false;
 
     const view = document.getElementById("view");
     const resultEl = document.getElementById("result");
+    const guideEl = document.getElementById("guide");
     const barsEl = document.getElementById("bars");
     const statusEl = document.getElementById("status");
     const cameraBtn = document.getElementById("camera-btn");
-    const snapBtn = document.getElementById("snap-btn");
     const fileInput = document.getElementById("file-input");
 
-    // ===== 1. 모델 불러오기 (페이지가 열리면 자동 실행) =====
+    // ===== 1. 모델 불러오기 =====
     async function loadModel() {
       try {
         model = await tmImage.load(MODEL_URL, METADATA_URL);
@@ -98,23 +114,37 @@
     }
     loadModel();
 
-    // ===== 2. 결과 보여주기 =====
-    // prediction: [{className, probability}, ...]
+    // ===== 2. 라벨별 분리배출 안내 =====
+    function getGuideText(className) {
+      switch (className) {
+        case "일반쓰레기":
+          return "일반쓰레기로 버려 주세요. 음식물이나 재활용품이 아니면 보통 일반쓰레기에 들어가요.";
+        case "비닐":
+          return "비닐류로 버려 주세요. 깨끗하게 비우고, 더럽다면 헹군 뒤 버리면 좋아요.";
+        case "플라스틱":
+          return "플라스틱으로 버려 주세요. 내용물을 비우고 가능하면 헹궈서 버리면 좋아요.";
+        case "종이":
+          return "종이류로 버려 주세요. 음식이 묻었거나 젖은 종이는 일반쓰레기일 수 있어요.";
+        default:
+          return "판별 결과를 확인해 주세요.";
+      }
+    }
+
+    // ===== 3. 결과 보여주기 =====
     function showResult(prediction) {
-      // 확률이 가장 높은 항목 찾기
       let best = prediction[0];
       for (const p of prediction) {
         if (p.probability > best.probability) best = p;
       }
 
-      // 최대 확률이 0.7 미만이면 "잘 모르겠어요"
       if (best.probability < THRESHOLD) {
         resultEl.textContent = "🤔 잘 모르겠어요";
+        guideEl.textContent = "조금 더 가까이 찍거나 다른 사진으로 다시 해 보세요.";
       } else {
         resultEl.textContent = best.className;
+        guideEl.textContent = getGuideText(best.className);
       }
 
-      // 항목별 확률 막대 그리기 (textContent만 사용해서 안전하게)
       barsEl.textContent = "";
       for (const p of prediction) {
         const row = document.createElement("div");
@@ -133,13 +163,12 @@
       }
     }
 
-    // ===== 3. 카메라 =====
+    // ===== 4. 카메라 =====
     async function startCamera() {
       if (!model) { statusEl.textContent = "아직 모델을 불러오는 중이에요."; return; }
       cameraBtn.disabled = true;
       statusEl.textContent = "카메라를 켜는 중...";
       try {
-        // 뒷면 카메라를 우선 사용 (태블릿·스마트폰)
         webcam = new tmImage.Webcam(360, 360, false);
         await webcam.setup({ facingMode: "environment" });
         await webcam.play();
@@ -148,7 +177,6 @@
         view.appendChild(webcam.canvas);
         cameraBtn.textContent = "⏹️ 카메라 끄기";
         cameraBtn.disabled = false;
-        snapBtn.disabled = true; // 실시간으로 계속 판별하므로 필요 없음
         statusEl.textContent = "실시간으로 알려주고 있어요.";
         rafId = window.requestAnimationFrame(cameraLoop);
       } catch (e) {
@@ -172,7 +200,6 @@
       statusEl.textContent = "카메라를 껐어요.";
     }
 
-    // 카메라 화면을 계속 갱신하며 판별
     async function cameraLoop() {
       if (!webcam) return;
       webcam.update();
@@ -192,16 +219,14 @@
       if (webcam) stopCamera(); else startCamera();
     });
 
-    // ===== 4. 사진 올리기 (기기 안에서만 처리, 서버로 전송 안 함) =====
+    // ===== 5. 사진 올리기 =====
     fileInput.addEventListener("change", () => {
       const file = fileInput.files && fileInput.files[0];
       if (!file) return;
       if (!model) { statusEl.textContent = "아직 모델을 불러오는 중이에요."; return; }
 
-      // 카메라가 켜져 있으면 먼저 끄기
       if (webcam) stopCamera();
 
-      // 브라우저 안에서만 쓰는 임시 주소 만들기
       const url = URL.createObjectURL(file);
       const img = new Image();
       img.onload = async () => {
@@ -216,14 +241,14 @@
           console.error(e);
           statusEl.textContent = "사진을 판별하지 못했어요.";
         }
-        URL.revokeObjectURL(url); // 임시 주소 정리
+        URL.revokeObjectURL(url);
       };
       img.onerror = () => {
         statusEl.textContent = "사진을 열 수 없어요. 다른 사진을 골라 주세요.";
         URL.revokeObjectURL(url);
       };
       img.src = url;
-      fileInput.value = ""; // 같은 사진을 다시 고를 수 있게 초기화
+      fileInput.value = "";
     });
   </script>
 </body>
