@@ -117,11 +117,13 @@
 
     // ===== 2. 모델 라벨별 분리배출 안내 =====
     function getClassInfo(className) {
-      switch (className) {
+      const normalizedClassName = className.trim().toLowerCase().replace(/\s+/g, " ");
+      switch (normalizedClassName) {
         case "general waste":
         case "일반쓰레기":
+        case "일반 쓰레기":
           return {
-            label: "일반 쓰레기",
+            label: "일반쓰레기",
             icon: "🗑️",
             guide: "일반 쓰레기통에 버리세요."
           };
