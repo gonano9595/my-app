@@ -65,6 +65,7 @@
     <!-- 사진 올리기: 사진은 이 기기 안에서만 처리됨 -->
     <label class="file-btn" for="file-input">🖼️ 사진 올리기</label>
     <input id="file-input" type="file" accept="image/*">
+    <button id="reset-btn" class="secondary" type="button">🔄 초기화</button>
   </div>
 
   <!-- 카메라 화면 또는 올린 사진이 보이는 곳 -->
@@ -94,6 +95,7 @@
     let webcam = null;
     let rafId = null;
     let predicting = false;
+    let uploadRequestId = 0;
 
     const view = document.getElementById("view");
     const resultEl = document.getElementById("result");
@@ -102,6 +104,7 @@
     const statusEl = document.getElementById("status");
     const cameraBtn = document.getElementById("camera-btn");
     const fileInput = document.getElementById("file-input");
+    const resetBtn = document.getElementById("reset-btn");
 
     // ===== 1. 모델 불러오기 =====
     async function loadModel() {
@@ -248,10 +251,29 @@
       if (webcam) stopCamera(); else startCamera();
     });
 
-    // ===== 5. 사진 올리기 =====
+    // ===== 5. 초기화 =====
+    resetBtn.addEventListener("click", () => {
+      uploadRequestId++;
+      fileInput.value = "";
+      if (webcam) stopCamera();
+      view.textContent = "";
+      const ph = document.createElement("span");
+      ph.id = "placeholder";
+      ph.textContent = "카메라를 켜거나 사진을 올려 주세요";
+      view.appendChild(ph);
+      resultEl.textContent = "";
+      guideEl.textContent = "판별되면 여기에 분리배출 안내가 표시돼요.";
+      barsEl.textContent = "";
+      statusEl.textContent = model
+        ? "초기화했어요. 다른 사진을 올리거나 카메라를 켜 보세요."
+        : "모델을 불러오는 중이에요.";
+    });
+
+    // ===== 6. 사진 올리기 =====
     fileInput.addEventListener("change", () => {
       const file = fileInput.files && fileInput.files[0];
       if (!file) return;
+      const requestId = ++uploadRequestId;
       if (!model) { statusEl.textContent = "아직 모델을 불러오는 중이에요."; return; }
 
       if (webcam) stopCamera();
@@ -259,21 +281,28 @@
       const url = URL.createObjectURL(file);
       const img = new Image();
       img.onload = async () => {
+        if (requestId !== uploadRequestId) {
+          URL.revokeObjectURL(url);
+          return;
+        }
         view.textContent = "";
         view.appendChild(img);
         statusEl.textContent = "판별하는 중...";
         try {
           const prediction = await model.predict(img);
-          showResult(prediction);
-          statusEl.textContent = "판별 완료!";
+          if (requestId === uploadRequestId) {
+            showResult(prediction);
+            statusEl.textContent = "판별 완료!";
+          }
         } catch (e) {
           console.error(e);
-          statusEl.textContent = "사진을 판별하지 못했어요.";
+          if (requestId === uploadRequestId) statusEl.textContent = "사진을 판별하지 못했어요.";
+        } finally {
+          URL.revokeObjectURL(url);
         }
-        URL.revokeObjectURL(url);
       };
       img.onerror = () => {
-        statusEl.textContent = "사진을 열 수 없어요. 다른 사진을 골라 주세요.";
+        if (requestId === uploadRequestId) statusEl.textContent = "사진을 열 수 없어요. 다른 사진을 골라 주세요.";
         URL.revokeObjectURL(url);
       };
       img.src = url;
