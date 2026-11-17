@@ -1,1 +1,284 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <!-- 태블릿·스마트폰 화면에 맞추기 -->
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>분리배출 도우미</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 16px;
+      font-family: "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+      background: linear-gradient(180deg, #eaf7ee, #f8fcf9);
+      color: #1f3d2b;
+      text-align: center;
+    }
+    h1 { font-size: 1.7rem; margin: 8px 0; }
+    .desc { font-size: 1.05rem; margin-bottom: 16px; }
+    .buttons { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-bottom: 16px; }
+    button, .file-btn {
+      font-size: 1.15rem; padding: 14px 20px; border: none; border-radius: 14px;
+      background: #2e9e5b; color: #fff; cursor: pointer; font-weight: bold;
+      box-shadow: 0 4px 0 #237546;
+    }
+    button.secondary { background: #6b7f73; box-shadow: 0 4px 0 #516056; }
+    button:disabled { opacity: .5; box-shadow: none; }
+    /* 사진 올리기 버튼: 실제 input은 숨기고 label을 버튼처럼 보이게 함 */
+    .file-btn { display: inline-block; background: #3b82c4; box-shadow: 0 4px 0 #2b679d; }
+    #file-input { display: none; }
+    #view {
+      width: 100%; max-width: 360px; aspect-ratio: 1 / 1; margin: 0 auto 16px;
+      background: #fff; border: 3px dashed #9fd3b3; border-radius: 16px;
+      display: flex; align-items: center; justify-content: center; overflow: hidden;
+    }
+    #view canvas, #view img { width: 100%; height: 100%; object-fit: contain; }
+    #placeholder { color: #7a9a86; padding: 12px; }
+    #result {
+      display: inline-block; font-size: 1.6rem; font-weight: bold; min-height: 2.4rem; margin: 8px 0;
+      padding: 8px 18px; border-radius: 999px; background: #e2f5e8; color: #237546;
+    }
+    .result-card {
+      max-width: 360px; margin: 0 auto 12px; padding: 12px 14px;
+      background: #fff; border-radius: 16px; border: 1px solid #d8eadf;
+      box-shadow: 0 6px 16px rgba(0,0,0,.05);
+    }
+    #guide {
+      max-width: 360px; margin: 0 auto 10px; padding: 12px 14px;
+      background: #f3fff6; border: 1px solid #d8eadf; border-radius: 14px;
+      font-size: 1.1rem; font-weight: bold; line-height: 1.55; text-align: center;
+    }
+    #bars { max-width: 360px; margin: 0 auto; text-align: left; }
+    .bar-row { margin: 6px 0; font-size: .95rem; }
+    .bar-bg { background: #d3e8da; border-radius: 8px; height: 14px; overflow: hidden; }
+    .bar-fill { background: #2e9e5b; height: 100%; width: 0; }
+    #status { color: #555; margin-top: 8px; min-height: 1.4rem; }
+    .privacy { font-size: .85rem; color: #5b7364; margin-top: 18px; }
+  </style>
+</head>
+<body>
+  <h1>♻️ 분리배출 도우미</h1>
+  <p class="desc">쓰레기를 찍거나 사진을 올리면 어떻게 버릴지 알려줘요!</p>
 
+  <div class="buttons">
+    <button id="camera-btn" type="button">📷 카메라 켜기</button>
+    <!-- 사진 올리기: 사진은 이 기기 안에서만 처리됨 -->
+    <label class="file-btn" for="file-input">🖼️ 사진 올리기</label>
+    <input id="file-input" type="file" accept="image/*">
+  </div>
+
+  <!-- 카메라 화면 또는 올린 사진이 보이는 곳 -->
+  <div id="view"><span id="placeholder">카메라를 켜거나 사진을 올려 주세요</span></div>
+
+  <div class="result-card">
+    <div id="result"></div>
+    <div id="guide">판별되면 여기에 분리배출 안내가 표시돼요.</div>
+  </div>
+
+  <div id="bars"></div>
+  <div id="status">모델을 불러오는 중이에요...</div>
+
+  <p class="privacy">🔒 사진은 밖으로 보내지 않고 이 기기 안에서만 사용해요.</p>
+
+  <!-- 티처블머신이 제공한 script (그대로 사용) -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8/dist/teachablemachine-image.min.js"></script>
+
+  <script>
+    // ===== 설정 =====
+    const MODEL_URL = "./model.json";       // 같은 폴더의 모델 파일
+    const METADATA_URL = "./metadata.json"; // 같은 폴더의 메타데이터 파일
+    const THRESHOLD = 0.7;                  // 이 값보다 낮으면 "잘 모르겠어요"
+
+    let model = null;
+    let webcam = null;
+    let rafId = null;
+    let predicting = false;
+
+    const view = document.getElementById("view");
+    const resultEl = document.getElementById("result");
+    const guideEl = document.getElementById("guide");
+    const barsEl = document.getElementById("bars");
+    const statusEl = document.getElementById("status");
+    const cameraBtn = document.getElementById("camera-btn");
+    const fileInput = document.getElementById("file-input");
+
+    // ===== 1. 모델 불러오기 =====
+    async function loadModel() {
+      try {
+        model = await tmImage.load(MODEL_URL, METADATA_URL);
+        statusEl.textContent = "준비 완료! 카메라를 켜거나 사진을 올려 보세요.";
+      } catch (e) {
+        console.error(e);
+        statusEl.textContent = "모델을 불러오지 못했어요. 웹 주소(https)로 열었는지 확인해 주세요.";
+      }
+    }
+    loadModel();
+
+    // ===== 2. 모델 라벨별 분리배출 안내 =====
+    function getClassInfo(className) {
+      const normalizedClassName = className.trim().toLowerCase().replace(/\s+/g, " ");
+      switch (normalizedClassName) {
+        case "general waste":
+        case "general wast...":
+        case "일반쓰레기":
+        case "일반 쓰레기":
+          return {
+            label: "일반쓰레기",
+            icon: "🗑️",
+            guide: "일반 쓰레기통에 버리세요."
+          };
+        case "paper":
+        case "종이":
+          return {
+            label: "종이",
+            icon: "📄",
+            guide: "종이함에 버리세요."
+          };
+        case "plastic":
+        case "플라스틱":
+          return {
+            label: "플라스틱",
+            icon: "🧴",
+            guide: "플라스틱함에 버리세요."
+          };
+        case "plastic bag":
+        case "비닐":
+          return {
+            label: "비닐",
+            icon: "🛍️",
+            guide: "비닐함에 버리세요."
+          };
+        default:
+          return {
+            label: className,
+            icon: "♻️",
+            guide: "분리배출 방법을 확인해 주세요."
+          };
+      }
+    }
+
+    // ===== 3. 결과 보여주기 =====
+    function showResult(prediction) {
+      let best = prediction[0];
+      for (const p of prediction) {
+        if (p.probability > best.probability) best = p;
+      }
+
+      if (best.probability < THRESHOLD) {
+        resultEl.textContent = "🤔 잘 모르겠어요";
+        guideEl.textContent = "조금 더 가까이 찍거나 다른 사진으로 다시 해 보세요.";
+      } else {
+        const classInfo = getClassInfo(best.className);
+        resultEl.textContent = classInfo.icon + " " + classInfo.label;
+        guideEl.textContent = classInfo.guide;
+      }
+
+      barsEl.textContent = "";
+      for (const p of prediction) {
+        const row = document.createElement("div");
+        row.className = "bar-row";
+        const label = document.createElement("div");
+        label.textContent = getClassInfo(p.className).label + " " + Math.round(p.probability * 100) + "%";
+        const bg = document.createElement("div");
+        bg.className = "bar-bg";
+        const fill = document.createElement("div");
+        fill.className = "bar-fill";
+        fill.style.width = (p.probability * 100) + "%";
+        bg.appendChild(fill);
+        row.appendChild(label);
+        row.appendChild(bg);
+        barsEl.appendChild(row);
+      }
+    }
+
+    // ===== 4. 카메라 =====
+    async function startCamera() {
+      if (!model) { statusEl.textContent = "아직 모델을 불러오는 중이에요."; return; }
+      cameraBtn.disabled = true;
+      statusEl.textContent = "카메라를 켜는 중...";
+      try {
+        webcam = new tmImage.Webcam(360, 360, false);
+        await webcam.setup({ facingMode: "environment" });
+        await webcam.play();
+
+        view.textContent = "";
+        view.appendChild(webcam.canvas);
+        cameraBtn.textContent = "⏹️ 카메라 끄기";
+        cameraBtn.disabled = false;
+        statusEl.textContent = "실시간으로 알려주고 있어요.";
+        rafId = window.requestAnimationFrame(cameraLoop);
+      } catch (e) {
+        console.error(e);
+        webcam = null;
+        cameraBtn.disabled = false;
+        statusEl.textContent = "카메라를 쓸 수 없어요. 카메라 권한을 허용했는지 확인해 주세요. (사진 올리기는 사용할 수 있어요)";
+      }
+    }
+
+    function stopCamera() {
+      if (rafId) window.cancelAnimationFrame(rafId);
+      rafId = null;
+      if (webcam) { webcam.stop(); webcam = null; }
+      view.textContent = "";
+      const ph = document.createElement("span");
+      ph.id = "placeholder";
+      ph.textContent = "카메라를 켜거나 사진을 올려 주세요";
+      view.appendChild(ph);
+      cameraBtn.textContent = "📷 카메라 켜기";
+      statusEl.textContent = "카메라를 껐어요.";
+    }
+
+    async function cameraLoop() {
+      if (!webcam) return;
+      webcam.update();
+      if (!predicting) {
+        predicting = true;
+        try {
+          const prediction = await model.predict(webcam.canvas);
+          if (webcam) showResult(prediction);
+        } finally {
+          predicting = false;
+        }
+      }
+      if (webcam) rafId = window.requestAnimationFrame(cameraLoop);
+    }
+
+    cameraBtn.addEventListener("click", () => {
+      if (webcam) stopCamera(); else startCamera();
+    });
+
+    // ===== 5. 사진 올리기 =====
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+      if (!model) { statusEl.textContent = "아직 모델을 불러오는 중이에요."; return; }
+
+      if (webcam) stopCamera();
+
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = async () => {
+        view.textContent = "";
+        view.appendChild(img);
+        statusEl.textContent = "판별하는 중...";
+        try {
+          const prediction = await model.predict(img);
+          showResult(prediction);
+          statusEl.textContent = "판별 완료!";
+        } catch (e) {
+          console.error(e);
+          statusEl.textContent = "사진을 판별하지 못했어요.";
+        }
+        URL.revokeObjectURL(url);
+      };
+      img.onerror = () => {
+        statusEl.textContent = "사진을 열 수 없어요. 다른 사진을 골라 주세요.";
+        URL.revokeObjectURL(url);
+      };
+      img.src = url;
+      fileInput.value = "";
+    });
+  </script>
+</body>
+</html>
